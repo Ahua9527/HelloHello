@@ -10,7 +10,7 @@
 - **智能防抖**: 内置状态机，通过 `fail_count` 和 `success_count` 阈值避免网络瞬时波动误报
 - **配置热更**: 基于 fsnotify 的配置热重载，修改配置即刻生效，无需重启服务；配置校验失败时保留旧配置
 - **配置校验**: 启动时校验配置合法性 (interval/threshold > 0)，非法配置直接退出并提示
-- **多维告警**: 支持钉钉 Webhook (HMAC-SHA256 签名，指数退避重试) 和 macOS 本地通知
+- **多维告警**: 支持钉钉告警通道 (Webhook，HMAC-SHA256 签名，指数退避重试) 与灵动岛通知，关键状态变化即时触达
 - **并发架构**: 每个监控主机运行在独立 goroutine，高效稳定
 - **极简交互**: 提供 Bubble Tea 实现的 TUI 管理界面，操作简单直观
 
@@ -50,13 +50,20 @@ curl -fsSL https://hello.ahua.space/sh | sudo bash -s uninstall
 sudo hello
 ```
 
+## 发布通道
+
+- 稳定版 Tag 规则：`vX.Y.Z`（如 `v1.2.3`）
+- Beta Tag 规则：`vX.Y.Z-beta.N`（如 `v1.2.3-beta.1`）
+- Beta 发布仅进入私有仓库 `Ahua9527/HelloHello-Private`，并标记为 GitHub Pre-release
+- 安装/更新脚本默认使用稳定版 `releases/latest`，不会自动拉取 Beta 版本
+
 ## 配置说明
 
-配置文件位于: `/Library/Application\ Support/HelloHello/config.conf`
+配置文件位于: `/Library/Application\ Support/HelloHello/config.toml`
 
 ### 示例配置
 
-```ini
+```toml
 [general]
 # 配置文件版本号，固定 1
 version = 1
@@ -68,48 +75,50 @@ success_count = 3
 
 [notify]
 # 通知模板，占位符: {name} {ip} {fail_count} {success_count} {time}
-down = [告警] {name}({ip}) 不可达，连续失败 {fail_count} 次
-up = [恢复] {name}({ip}) 已恢复
+down = "[告警] {name}({ip}) 不可达，连续失败 {fail_count} 次"
+up = "[恢复] {name}({ip}) 已恢复"
 
-[hosts]
-# 基础示例：仅名称 + IP
-# 网关 = 192.168.1.1
+[[hosts]]
+name = "网关"
+ip = "192.168.1.1"
 
-# 带手机号 @ 的示例：多个手机号用 @ 前缀分隔，正文会自动附带 @手机号
-# 业务服务器 = 10.0.0.1, at_mobiles=@13800138000@13900139000
+[[hosts]]
+name = "业务服务器"
+ip = "10.0.0.1"
+at_mobiles = ["13800138000", "13900139000"]
 
-# 覆盖间隔/阈值的示例：interval_seconds/fail_count/success_count 覆盖默认值
-# 核心数据库 = 10.0.0.2, interval_seconds=5, fail_count=2, success_count=1
-
-# 可选参数说明：
-#   interval_seconds          : 主机级检测间隔（秒，推荐）
-#   interval                  : 主机级检测间隔（秒，兼容历史别名）
-#   fail_count / success_count : 覆盖默认阈值
-#   at_mobiles                : 钉钉手机号列表，用 @ 前缀分隔
-# 注释以 # 开头，空行会被忽略
+[[hosts]]
+name = "核心数据库"
+ip = "10.0.0.2"
+interval_seconds = 5
+fail_count = 2
+success_count = 1
 
 [webhook]
 # 启用钉钉通知（true/false）
 enabled = true
 # 钉钉机器人 Webhook 地址
-url =
+url = ""
 # 钉钉机器人签名密钥
-secret =
+secret = ""
 
 [macos]
-# 是否启用 macOS 系统通知
-enabled = true
-# 通知声音，可填 default 或系统可用声音名称
+# 是否启用灵动岛通知通道（默认 true）
+dynamic_island_enabled = true
+# 灵动岛通知显示时长（毫秒），最小 500，默认 2500
+dynamic_island_duration_ms = 2500
+# 是否启用手动回收（默认 false，true 时仅点击后收回）
+dynamic_island_manual_dismiss = false
 # 启动静默期（秒），避免服务启动瞬间通知刷屏
 startup_silence_seconds = 15
-sound = default
 
 ```
 
-### macOS 通知字段说明
+### macOS 灵动岛通知字段说明
 
-- `macos.enabled` (即 notifications.macos.enabled): 是否启用 macOS 系统通知，类型为 `bool`，默认 `false`
-- `macos.sound` (即 notifications.macos.sound): 通知声音，类型为 `string`，默认 `default`；设置为空字符串表示静音
+- `macos.dynamic_island_enabled`: 是否启用灵动岛通知通道，类型为 `bool`，默认 `true`
+- `macos.dynamic_island_duration_ms`: 灵动岛通知显示时长（毫秒），类型为 `int`，最小 `500`，默认 `2500`。`dynamic_island_manual_dismiss=false` 时用于自动回收；手动回收模式下该值仅保留兼容
+- `macos.dynamic_island_manual_dismiss`: 是否启用手动回收模式，类型为 `bool`，默认 `false`。为 `true` 时通知仅在点击后回收；若旧通知未回收且新通知到达，会先收回旧通知再展示新通知
 - `macos.startup_silence_seconds` (即 notifications.macos.startup_silence_seconds): 启动静默期（秒），避免服务启动瞬间通知刷屏，默认 `15`
 
 ### 模板变量
@@ -127,79 +136,66 @@ sound = default
 ```
 /Library/Application Support/HelloHello/
   ├─ hellohello           # Go 二进制
-  ├─ config.conf          # 配置文件
-  ├─ .notify_setup_done   # 通知权限状态文件 (JSON 格式)
-  ├─ notify_queue.jsonl   # 守护进程写入的通知事件队列
-  ├─ HelloHelloHelper.app # 用户级 Helper (LaunchAgent 负责拉起并弹窗)
+  ├─ config.toml          # 主配置文件
+  ├─ notifier.sock        # 守护进程 -> notifier 的 UDS 通道
+  ├─ HelloHelloNotifier.app # 用户级 notifier app（灵动岛渲染）
   └─ status.json          # 状态文件 (自动生成)
 
 /Library/Logs/HelloHello/
   ├─ hellohello-core.log  # 应用日志
   ├─ stdout.log           # LaunchDaemon 标准输出
-  ├─ stderr.log           # LaunchDaemon 标准错误
-  ├─ notify-setup.stdout.log  # 通知权限请求输出
-  └─ notify-setup.stderr.log  # 通知权限请求错误
+  └─ stderr.log           # LaunchDaemon 标准错误
+
+~/Library/Logs/HelloHello/
+  ├─ notifier.stdout.log  # notifier 标准输出（用户级 LaunchAgent）
+  └─ notifier.stderr.log  # notifier 标准错误（用户级 LaunchAgent）
 
 /Library/LaunchDaemons/
   └─ com.ahua.hellohello.plist
 
 /Library/LaunchAgents/
-  ├─ com.ahua.hellohello.notify-setup.plist  # 首次权限触发
-  └─ com.ahua.hellohello.helper.plist        # 用户级 Helper，消费队列并弹窗
+  └─ com.ahua.hellohello.notifier.plist      # 用户级 notifier，消费 UDS 并渲染灵动岛
 ```
 
-Helper 标准输出/错误日志由 LaunchAgent 写入 `/tmp/com.ahua.hellohello.helper.*.log`。
+notifier 标准输出/错误日志由用户级 LaunchAgent 写入 `~/Library/Logs/HelloHello/notifier.*.log`。
 
 ## 高级使用
 
-### 启用 macOS 系统通知
+### 启用灵动岛通知
 
-1. 确保配置文件启用系统通知并设置声音:
-   ```ini
+1. 确保配置文件启用灵动岛通知通道:
+   ```toml
    [macos]
-   enabled = true
-   sound = default
+   dynamic_island_enabled = true
+   dynamic_island_duration_ms = 2500
+   dynamic_island_manual_dismiss = false
    ```
    完整配置示例见上方「示例配置」。
-2. 登录后会启动用户级 Helper（LaunchAgent），它从 `notify_queue.jsonl` 读取并弹出通知；无登录用户时仅发送 Webhook。
-3. 首次用户登录时会自动弹出系统权限请求对话框。
-4. 授权成功后会发送一条测试通知，并更新状态文件:
-   `/Library/Application Support/HelloHello/.notify_setup_done`
-
-### 权限状态说明
-
-状态文件 `.notify_setup_done` 为 JSON 格式，记录以下状态：
-- `granted`: 用户已授权，可正常发送通知
-- `requested`: 已触发权限请求，等待用户在系统对话框中授权
-- `denied`: 用户拒绝授权
-- `timeout`: 权限请求超时
-
-### 重新触发权限请求
-
-如果之前点击了"不允许"或需要重新授权，删除状态文件后重新登录即可:
-
-```bash
-sudo rm -f "/Library/Application Support/HelloHello/.notify_setup_done"
-```
-
-### 权限与故障排查
-
-- 权限请求仅在 GUI 会话中生效，SSH/无头环境会跳过请求。
-- 通知权限日志位于:
-  `/Library/Logs/HelloHello/notify-setup.stdout.log`
-  `/Library/Logs/HelloHello/notify-setup.stderr.log`
+2. 登录后会启动用户级通知服务（LaunchAgent），守护进程通过 UDS (`notifier.sock`) 投递通知请求。
+3. 通知服务暂不可用时不会阻断守护进程主流程，Webhook 通道仍照常发送。
 
 ## FAQ
 
-**Q: 为什么没收到系统通知?**
+**Q: 为什么没收到灵动岛通知?**
 A:
-- 检查系统设置 → 通知 → HelloHello 是否已允许
-- 查看通知权限日志: `/Library/Logs/HelloHello/notify-setup.*.log`
-- 检查状态文件内容: `cat "/Library/Application Support/HelloHello/.notify_setup_done"`
-  - 如果状态为 `requested`，表示权限请求已触发但未完成授权
-  - 如果状态为 `denied`，表示用户拒绝了授权
-- 删除状态文件后重新登录触发权限请求:
-  `/Library/Application Support/HelloHello/.notify_setup_done`
+- 检查 `[macos]` 配置：`dynamic_island_enabled=true`
+- 检查 LaunchAgent 状态：`launchctl print gui/$(id -u)/com.ahua.hellohello.notifier`
+- 检查通知服务日志：`~/Library/Logs/HelloHello/notifier.stderr.log`
+- 检查 socket 文件：`ls -l \"/Library/Application Support/HelloHello/notifier.sock\"`
+- 手动测试：`hellohello --test-notify`
+
+**Q: 安装时出现 `getcwd` / `job-working-directory` 报错怎么办?**
+A:
+- 这通常表示执行命令时所在目录已被删除或失效。
+- 新版安装脚本会自动切换到 `/` 并继续执行，避免重复刷屏。
+
+**Q: 使用 `LOCAL_TEST` 安装后 notifier 起不来，提示签名或 socket 问题怎么办?**
+A:
+- 新版脚本在 `LOCAL_TEST` 模式会自动对 `hellohello` 与 `HelloHelloNotifier.app` 重签并校验，降低本地调试签名异常概率。
+- 若仍异常，请依次检查：
+  - `launchctl print gui/$(id -u)/com.ahua.hellohello.notifier`
+  - `codesign --verify --deep --strict "/Library/Application Support/HelloHello/HelloHelloNotifier.app"`
+  - `ls -l "/Library/Application Support/HelloHello/notifier.sock"`
 
 ## 构建
 
@@ -210,7 +206,17 @@ xcode-select --install
 CGO_ENABLED=1 go build ./cmd/hellohello
 ```
 
-最低系统要求: macOS 10.14+
+最低系统要求: macOS 13.0+
+
+### 自托管 CI Runner（macOS）初始化
+
+首次配置 self-hosted macOS Runner 时，必须先同意 Xcode License，否则 CI 中的 `git`/`xcodebuild` 可能以 `exit code 69` 失败。
+
+```bash
+xcodebuild -license check
+sudo xcodebuild -license accept
+sudo xcodebuild -runFirstLaunch
+```
 
 ## 状态机设计
 
